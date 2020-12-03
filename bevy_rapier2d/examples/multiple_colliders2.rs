@@ -54,43 +54,56 @@ pub fn setup_physics(mut commands: Commands) {
     /*
      * Ground
      */
-    let ground_size = 25.0;
+    let ground_size = 50.0;
+    let ground_height = 0.1;
 
-    let rigid_body = RigidBodyBuilder::new_static();
-    let collider = ColliderBuilder::cuboid(ground_size, 1.2);
+    let rigid_body = RigidBodyBuilder::new_static().translation(0.0, -ground_height);
+    let collider = ColliderBuilder::cuboid(ground_size, ground_height);
     commands.spawn((rigid_body, collider));
-
-    let rigid_body = RigidBodyBuilder::new_static()
-        .rotation(std::f32::consts::FRAC_PI_2)
-        .translation(ground_size, ground_size * 2.0);
-    let collider = ColliderBuilder::cuboid(ground_size * 2.0, 1.2);
-    commands.spawn((rigid_body, collider));
-
-    let body = RigidBodyBuilder::new_static()
-        .rotation(std::f32::consts::FRAC_PI_2)
-        .translation(-ground_size, ground_size * 2.0);
-    let collider = ColliderBuilder::cuboid(ground_size * 2.0, 1.2);
-    commands.spawn((body, collider));
 
     /*
      * Create the cubes
      */
-    let num = 20;
-    let rad = 0.5;
+    let num = 4;
+    let rad = 0.2;
 
-    let shift = rad * 2.0;
-    let centerx = shift * (num as f32) / 2.0;
+    let shift = rad * 4.0 + rad;
+    let centerx = shift * (num / 2) as f32;
     let centery = shift / 2.0;
 
-    for i in 0..num {
-        for j in 0usize..num * 5 {
-            let x = i as f32 * shift - centerx;
-            let y = j as f32 * shift + centery + 2.0;
+    let mut offset = -(num as f32) * (rad * 2.0 + rad) * 0.5;
+
+    for j in 0usize..20 {
+        for i in 0..num {
+            let x = i as f32 * shift * 5.0 - centerx + offset;
+            let y = j as f32 * (shift * 5.0) + centery + 3.0;
 
             // Build the rigid body.
-            let body = RigidBodyBuilder::new_dynamic().translation(x, y);
-            let collider = ColliderBuilder::cuboid(rad, rad).density(1.0);
-            commands.spawn((body, collider));
+            let rigid_body = RigidBodyBuilder::new_dynamic().translation(x, y);
+
+            // Attach multiple colliders to this rigid-body using Bevy hierarchy.
+            let collider1 = ColliderBuilder::cuboid(rad * 10.0, rad);
+            let collider2 =
+                ColliderBuilder::cuboid(rad, rad * 10.0).translation(rad * 10.0, rad * 10.0);
+            let collider3 =
+                ColliderBuilder::cuboid(rad, rad * 10.0).translation(-rad * 10.0, rad * 10.0);
+
+            // NOTE: we need the Transform and GlobalTransform
+            // so that the transform of the entity with a rigid-body
+            // is properly propagated to its children with collider meshes.
+            commands
+                .spawn((
+                    rigid_body,
+                    Transform::identity(),
+                    GlobalTransform::identity(),
+                ))
+                .with_children(|parent| {
+                    parent.spawn((collider1,));
+                    parent.spawn((collider2,));
+                    parent.spawn((collider3,));
+                });
         }
+
+        offset -= 0.05 * rad * (num as f32 - 1.0);
     }
 }

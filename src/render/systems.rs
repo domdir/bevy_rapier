@@ -1,8 +1,11 @@
 use crate::physics::{ColliderHandleComponent, RapierConfiguration};
 use crate::render::RapierRenderColor;
 use bevy::prelude::*;
+#[cfg(feature = "dim2")]
+use bevy::render::mesh::{Indices, VertexAttributeValues};
 use rapier::dynamics::RigidBodySet;
 use rapier::geometry::{ColliderSet, ShapeType};
+use std::collections::HashMap;
 
 /// System responsible for attaching a PbrComponents to each entity having a collider.
 pub fn create_collider_renders_system(
@@ -41,14 +44,18 @@ pub fn create_collider_renders_system(
     ];
 
     let mut icolor = 0;
+    let mut body_colors = HashMap::new();
+
     for (entity, collider, debug_color) in &mut query.iter() {
         if let Some(collider) = colliders.get(collider.handle()) {
             if let Some(body) = bodies.get(collider.parent()) {
                 let default_color = if body.is_static() {
                     ground_color
                 } else {
-                    icolor += 1;
-                    palette[icolor % palette.len()]
+                    *body_colors.entry(collider.parent()).or_insert_with(|| {
+                        icolor += 1;
+                        palette[icolor % palette.len()]
+                    })
                 };
 
                 let shape = collider.shape();
@@ -69,6 +76,31 @@ pub fn create_collider_renders_system(
                         subdivisions: 2,
                         radius: 1.0,
                     }),
+                    #[cfg(feature = "dim2")]
+                    ShapeType::Trimesh => {
+                        let mut mesh =
+                            Mesh::new(bevy::render::pipeline::PrimitiveTopology::TriangleList);
+                        let trimesh = shape.as_trimesh().unwrap();
+                        mesh.set_attribute(
+                            Mesh::ATTRIBUTE_POSITION,
+                            VertexAttributeValues::from(
+                                trimesh
+                                    .vertices()
+                                    .iter()
+                                    .map(|vertice| [vertice.x, vertice.y])
+                                    .collect::<Vec<_>>(),
+                            ),
+                        );
+                        mesh.set_indices(Some(Indices::U32(
+                            trimesh
+                                .indices()
+                                .iter()
+                                .flat_map(|triangle| triangle.iter())
+                                .cloned()
+                                .collect(),
+                        )));
+                        mesh
+                    }
                     _ => unimplemented!(),
                 };
 
@@ -87,17 +119,21 @@ pub fn create_collider_renders_system(
                         let b = shape.as_ball().unwrap();
                         Vec3::new(b.radius, b.radius, b.radius)
                     }
+                    ShapeType::Trimesh => Vec3::one(),
                     _ => unimplemented!(),
                 } * configuration.scale;
 
-                // NOTE: we can't have both the Scale and NonUniformScale components.
-                // However PbrComponents automatically adds a Scale component. So
-                // we add each of its field manually except for Scale.
-                // That's a bit messy so surely there is a better way?
+                let mut transform = Transform::from_scale(scale);
+                crate::physics::sync_transform(
+                    collider.position_wrt_parent(),
+                    configuration.scale,
+                    &mut transform,
+                );
+
                 let ground_pbr = PbrComponents {
                     mesh: meshes.add(mesh),
                     material: materials.add(color.into()),
-                    transform: Transform::from_scale(scale),
+                    transform,
                     ..Default::default()
                 };
 
