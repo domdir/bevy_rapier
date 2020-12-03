@@ -2,7 +2,7 @@ extern crate rapier2d as rapier; // For the debug UI.
 
 use bevy::prelude::*;
 use bevy::render::pass::ClearColor;
-use bevy_rapier2d::physics::{EventQueue, RapierConfiguration, RapierPhysicsPlugin};
+use bevy_rapier2d::physics::{RapierConfiguration, RapierPhysicsPlugin};
 use bevy_rapier2d::render::RapierRenderPlugin;
 use rapier2d::dynamics::RigidBodyBuilder;
 use rapier2d::geometry::ColliderBuilder;
@@ -29,7 +29,6 @@ fn main() {
         .add_startup_system(setup_graphics.system())
         .add_startup_system(setup_physics.system())
         .add_startup_system(enable_physics_profiling.system())
-        .add_system_to_stage(stage::POST_UPDATE, display_events.system())
         .run();
 }
 
@@ -38,7 +37,7 @@ fn enable_physics_profiling(mut pipeline: ResMut<PhysicsPipeline>) {
 }
 
 fn setup_graphics(mut commands: Commands, mut configuration: ResMut<RapierConfiguration>) {
-    configuration.scale = 15.0;
+    configuration.scale = 40.0;
 
     commands
         .spawn(LightComponents {
@@ -46,34 +45,38 @@ fn setup_graphics(mut commands: Commands, mut configuration: ResMut<RapierConfig
             ..Default::default()
         })
         .spawn(Camera2dComponents {
-            transform: Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
+            transform: Transform::from_translation(Vec3::new(0.0, 30.0, 0.0)),
             ..Camera2dComponents::default()
         });
 }
 
-fn display_events(events: Res<EventQueue>) {
-    while let Ok(proximity_event) = events.proximity_events.pop() {
-        println!("Received proximity event: {:?}", proximity_event);
-    }
-
-    while let Ok(contact_event) = events.contact_events.pop() {
-        println!("Received contact event: {:?}", contact_event);
-    }
-}
-
 pub fn setup_physics(mut commands: Commands) {
     /*
-     * Ground
+     * The ground
      */
-    let rigid_body = RigidBodyBuilder::new_static();
-    let collider = ColliderBuilder::cuboid(4.0, 1.2);
+    let ground_size = 5.0;
+    let ground_height = 0.1;
+
+    let rigid_body = RigidBodyBuilder::new_static().translation(0.0, -ground_height);
+    let collider = ColliderBuilder::cuboid(ground_size, ground_height);
     commands.spawn((rigid_body, collider));
 
-    let rigid_body = RigidBodyBuilder::new_static().translation(0.0, 5.0);
-    let collider = ColliderBuilder::cuboid(4.0, 1.2).sensor(true);
+    /*
+     * A rectangle that only rotate.
+     */
+    let rigid_body = RigidBodyBuilder::new_dynamic()
+        .translation(0.0, 3.0)
+        .lock_translations();
+    let collider = ColliderBuilder::cuboid(2.0, 0.6);
     commands.spawn((rigid_body, collider));
 
-    let rigid_body = RigidBodyBuilder::new_dynamic().translation(0.0, 13.0);
-    let collider = ColliderBuilder::cuboid(0.5, 0.5);
+    /*
+     * A tilted cuboid that cannot rotate.
+     */
+    let rigid_body = RigidBodyBuilder::new_dynamic()
+        .translation(0.3, 5.0)
+        .rotation(1.0)
+        .lock_rotations();
+    let collider = ColliderBuilder::cuboid(0.6, 0.4);
     commands.spawn((rigid_body, collider));
 }

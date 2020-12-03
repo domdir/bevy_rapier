@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy::render::pass::ClearColor;
 use bevy_rapier3d::physics::RapierPhysicsPlugin;
 use bevy_rapier3d::render::RapierRenderPlugin;
+use nalgebra::Vector3;
 use rapier3d::dynamics::RigidBodyBuilder;
 use rapier3d::geometry::ColliderBuilder;
 use rapier3d::pipeline::PhysicsPipeline;
@@ -11,11 +12,6 @@ use ui::DebugUiPlugin;
 
 #[path = "../../src_debug_ui/mod.rs"]
 mod ui;
-
-#[derive(Default)]
-pub struct DespawnResource {
-    pub entity: Option<Entity>,
-}
 
 fn main() {
     App::build()
@@ -25,7 +21,6 @@ fn main() {
             0xFF as f32 / 255.0,
         )))
         .add_resource(Msaa::default())
-        .add_resource(DespawnResource::default())
         .add_plugins(DefaultPlugins)
         .add_plugin(bevy_winit::WinitPlugin::default())
         .add_plugin(bevy_wgpu::WgpuPlugin::default())
@@ -35,7 +30,6 @@ fn main() {
         .add_startup_system(setup_graphics.system())
         .add_startup_system(setup_physics.system())
         .add_startup_system(enable_physics_profiling.system())
-        .add_system(despawn.system())
         .run();
 }
 
@@ -51,65 +45,42 @@ fn setup_graphics(mut commands: Commands) {
         })
         .spawn(Camera3dComponents {
             transform: Transform::from_matrix(Mat4::face_toward(
-                Vec3::new(-30.0, 30.0, 100.0),
-                Vec3::new(0.0, 10.0, 0.0),
+                Vec3::new(10.0, 3.0, 0.0),
+                Vec3::new(0.0, 3.0, 0.0),
                 Vec3::new(0.0, 1.0, 0.0),
             )),
             ..Default::default()
         });
 }
 
-pub fn setup_physics(mut commands: Commands, mut despawn: ResMut<DespawnResource>) {
+pub fn setup_physics(mut commands: Commands) {
     /*
-     * Ground
+     * The ground
      */
-    let ground_size = 200.1;
+    let ground_size = 5.0;
     let ground_height = 0.1;
 
     let rigid_body = RigidBodyBuilder::new_static().translation(0.0, -ground_height, 0.0);
     let collider = ColliderBuilder::cuboid(ground_size, ground_height, ground_size);
-    let ground_entity = commands
-        .spawn((rigid_body, collider))
-        .current_entity()
-        .unwrap();
-    despawn.entity = Some(ground_entity);
+    commands.spawn((rigid_body, collider));
+
     /*
-     * Create the cubes
+     * A rectangle that only rotates along the `x` axis.
      */
-    let num = 8;
-    let rad = 1.0;
+    let rigid_body = RigidBodyBuilder::new_dynamic()
+        .translation(0.0, 3.0, 0.0)
+        .lock_translations()
+        .principal_angular_inertia(Vector3::zeros(), Vector3::new(true, false, false));
+    let collider = ColliderBuilder::cuboid(0.2, 0.6, 2.0);
+    commands.spawn((rigid_body, collider));
 
-    let shift = rad * 2.0 + rad;
-    let centerx = shift * (num / 2) as f32;
-    let centery = shift / 2.0;
-    let centerz = shift * (num / 2) as f32;
-
-    let mut offset = -(num as f32) * (rad * 2.0 + rad) * 0.5;
-
-    for j in 0usize..20 {
-        for i in 0..num {
-            for k in 0usize..num {
-                let x = i as f32 * shift - centerx + offset;
-                let y = j as f32 * shift + centery + 3.0;
-                let z = k as f32 * shift - centerz + offset;
-
-                // Build the rigid body.
-                let rigid_body = RigidBodyBuilder::new_dynamic().translation(x, y, z);
-                let collider = ColliderBuilder::cuboid(rad, rad, rad).density(1.0);
-                commands.spawn((rigid_body, collider));
-            }
-        }
-
-        offset -= 0.05 * rad * (num as f32 - 1.0);
-    }
-}
-
-pub fn despawn(mut commands: Commands, time: Res<Time>, mut despawn: ResMut<DespawnResource>) {
-    if time.seconds_since_startup > 5.0 {
-        if let Some(entity) = despawn.entity {
-            println!("Despawning ground entity");
-            commands.despawn(entity);
-            despawn.entity = None;
-        }
-    }
+    /*
+     * A tilted cuboid that cannot rotate.
+     */
+    let rigid_body = RigidBodyBuilder::new_dynamic()
+        .translation(0.0, 5.0, 0.0)
+        .rotation(Vector3::x() * 1.0)
+        .lock_rotations();
+    let collider = ColliderBuilder::cuboid(0.6, 0.4, 0.4);
+    commands.spawn((rigid_body, collider));
 }

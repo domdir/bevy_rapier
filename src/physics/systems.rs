@@ -5,20 +5,12 @@ use crate::physics::{
 };
 
 use crate::rapier::pipeline::QueryPipeline;
-use bevy::ecs::Mut;
 use bevy::prelude::*;
 use rapier::dynamics::{IntegrationParameters, JointSet, RigidBodyBuilder, RigidBodySet};
 use rapier::geometry::{BroadPhase, ColliderBuilder, ColliderSet, NarrowPhase};
 use rapier::math::Isometry;
 use rapier::pipeline::PhysicsPipeline;
 
-// TODO: right now we only support one collider attached to one body.
-// This should be extanded to multiple bodies.
-// The reason why we build the body and the collider in the same system is
-// because systems run in parallel. This implies that if the collider creation
-// system runs before the body creation system, then it won't be able to create
-// the colliders because the related rigid-body handles don't exist yet. This
-// causes things to be initialized during multiple frames instead of just one.
 /// System responsible for creating a Rapier rigid-body and collider from their
 /// builder resources.
 pub fn create_body_and_collider_system(
@@ -26,19 +18,132 @@ pub fn create_body_and_collider_system(
     mut bodies: ResMut<RigidBodySet>,
     mut colliders: ResMut<ColliderSet>,
     mut entity_maps: ResMut<EntityMaps>,
-    entity: Entity,
-    body_builder: &RigidBodyBuilder,
-    collider_builder: &ColliderBuilder,
+    standalone_body_query: Query<Without<ColliderBuilder, (Entity, &RigidBodyBuilder)>>,
+    body_and_collider_query: Query<(Entity, &RigidBodyBuilder, &ColliderBuilder)>,
+    parented_collider_query: Query<Without<RigidBodyBuilder, (Entity, &Parent, &ColliderBuilder)>>,
 ) {
-    let handle = bodies.insert(body_builder.build());
-    commands.insert_one(entity, RigidBodyHandleComponent::from(handle));
-    commands.remove_one::<RigidBodyBuilder>(entity);
-    entity_maps.bodies.insert(entity, handle);
+    for (entity, body_builder) in standalone_body_query.iter() {
+        let handle = bodies.insert(body_builder.build());
+        commands.insert_one(entity, RigidBodyHandleComponent::from(handle));
+        commands.remove_one::<RigidBodyBuilder>(entity);
+        entity_maps.bodies.insert(entity, handle);
+    }
 
-    let handle = colliders.insert(collider_builder.build(), handle, &mut bodies);
-    commands.insert_one(entity, ColliderHandleComponent::from(handle));
-    commands.remove_one::<ColliderBuilder>(entity);
-    entity_maps.colliders.insert(entity, handle);
+    for (entity, body_builder, collider_builder) in body_and_collider_query.iter() {
+        let handle = bodies.insert(body_builder.build());
+        commands.insert_one(entity, RigidBodyHandleComponent::from(handle));
+        commands.remove_one::<RigidBodyBuilder>(entity);
+        entity_maps.bodies.insert(entity, handle);
+
+        let handle = colliders.insert(collider_builder.build(), handle, &mut bodies);
+        commands.insert_one(entity, ColliderHandleComponent::from(handle));
+        commands.remove_one::<ColliderBuilder>(entity);
+        entity_maps.colliders.insert(entity, handle);
+    }
+
+    for (entity, parent, collider_builder) in parented_collider_query.iter() {
+        if let Some(body_handle) = entity_maps.bodies.get(&parent.0) {
+            let handle = colliders.insert(collider_builder.build(), *body_handle, &mut bodies);
+            commands.insert_one(entity, ColliderHandleComponent::from(handle));
+            commands.remove_one::<ColliderBuilder>(entity);
+            entity_maps.colliders.insert(entity, handle);
+        } // warn here? panic here? do nothing?
+    }
+}
+
+#[test]
+fn test_create_body_and_collider_system() {
+    use bevy::ecs::Schedule;
+
+    let mut resources = Resources::default();
+    resources.insert(RigidBodySet::new());
+    resources.insert(ColliderSet::new());
+    resources.insert(EntityMaps::default());
+
+    let mut world = World::new();
+    let body_and_collider_entity =
+        world.spawn((RigidBodyBuilder::new_dynamic(), ColliderBuilder::ball(1.0)));
+
+    let body_only_entity = world.spawn((
+        RigidBodyBuilder::new_static(),
+        Parent(body_and_collider_entity),
+    ));
+
+    let parented_collider_entity_1 =
+        world.spawn((Parent(body_and_collider_entity), ColliderBuilder::ball(0.5)));
+
+    let parented_collider_entity_2 =
+        world.spawn((Parent(body_only_entity), ColliderBuilder::ball(0.25)));
+
+    let mut schedule = Schedule::default();
+    schedule.add_stage("physics_test");
+    schedule.add_system_to_stage("physics_test", create_body_and_collider_system.system());
+    schedule.run(&mut world, &mut resources);
+
+    let body_set = resources.get::<RigidBodySet>().unwrap();
+    let collider_set = resources.get::<ColliderSet>().unwrap();
+    let entity_maps = resources.get::<EntityMaps>().unwrap();
+
+    // body attached alongside collider
+    let attached_body_handle = world
+        .get::<RigidBodyHandleComponent>(body_and_collider_entity)
+        .unwrap()
+        .handle();
+    assert_eq!(
+        entity_maps.bodies[&body_and_collider_entity],
+        attached_body_handle
+    );
+    assert!(body_set.get(attached_body_handle).unwrap().is_dynamic());
+
+    // collider attached from same entity
+    let collider_handle = world
+        .get::<ColliderHandleComponent>(body_and_collider_entity)
+        .unwrap()
+        .handle();
+    assert_eq!(
+        entity_maps.colliders[&body_and_collider_entity],
+        collider_handle
+    );
+    let collider = collider_set.get(collider_handle).unwrap();
+    assert_eq!(attached_body_handle, collider.parent());
+    assert_eq!(collider.shape().as_ball().unwrap().radius, 1.0);
+
+    // collider attached to child entity of body with collider
+    let collider_handle = world
+        .get::<ColliderHandleComponent>(parented_collider_entity_1)
+        .unwrap()
+        .handle();
+    assert_eq!(
+        entity_maps.colliders[&parented_collider_entity_1],
+        collider_handle
+    );
+    let collider = collider_set.get(collider_handle).unwrap();
+    assert_eq!(attached_body_handle, collider.parent());
+    assert_eq!(collider.shape().as_ball().unwrap().radius, 0.5);
+
+    // standalone body with no collider, jointed to the attached body
+    let standalone_body_handle = world
+        .get::<RigidBodyHandleComponent>(body_only_entity)
+        .unwrap()
+        .handle();
+    assert_eq!(
+        entity_maps.bodies[&body_only_entity],
+        standalone_body_handle
+    );
+    assert!(body_set.get(standalone_body_handle).unwrap().is_static());
+
+    // collider attached to child entity of standlone body
+    let collider_handle = world
+        .get::<ColliderHandleComponent>(parented_collider_entity_2)
+        .unwrap()
+        .handle();
+    assert_eq!(
+        entity_maps.colliders[&parented_collider_entity_2],
+        collider_handle
+    );
+    let collider = collider_set.get(collider_handle).unwrap();
+    assert_eq!(standalone_body_handle, collider.parent());
+    assert_eq!(collider.shape().as_ball().unwrap().radius, 0.25);
 }
 
 /// System responsible for creating Rapier joints from their builder resources.
@@ -75,7 +180,7 @@ pub fn step_world_system(
     mut bodies: ResMut<RigidBodySet>,
     mut colliders: ResMut<ColliderSet>,
     mut joints: ResMut<JointSet>,
-    events: Res<EventQueue>,
+    events: ResMut<EventQueue>,
     mut query: Query<(
         &RigidBodyHandleComponent,
         &mut PhysicsInterpolationComponent,
@@ -85,37 +190,52 @@ pub fn step_world_system(
         events.clear();
     }
 
-    sim_to_render_time.diff += time.delta_seconds;
+    if configuration.time_dependent_number_of_timesteps {
+        sim_to_render_time.diff += time.delta_seconds;
 
-    let sim_dt = integration_parameters.dt();
-    while sim_to_render_time.diff >= sim_dt {
-        if configuration.physics_pipeline_active {
-            // NOTE: in this comparison we do the same computations we
-            // will do for the next `while` iteration test, to make sure we
-            // don't get bit by potential float inaccuracy.
-            if sim_to_render_time.diff - sim_dt < sim_dt {
-                // This is the last simulation step to be executed in the loop
-                // Update the previous state transforms
-                for (body_handle, mut previous_state) in query.iter_mut() {
-                    if let Some(body) = bodies.get(body_handle.handle()) {
-                        previous_state.0 = body.position;
+        let sim_dt = integration_parameters.dt();
+        while sim_to_render_time.diff >= sim_dt {
+            if configuration.physics_pipeline_active {
+                // NOTE: in this comparison we do the same computations we
+                // will do for the next `while` iteration test, to make sure we
+                // don't get bit by potential float inaccuracy.
+                if sim_to_render_time.diff - sim_dt < sim_dt {
+                    // This is the last simulation step to be executed in the loop
+                    // Update the previous state transforms
+                    for (body_handle, mut previous_state) in query.iter_mut() {
+                        if let Some(body) = bodies.get(body_handle.handle()) {
+                            previous_state.0 = Some(*body.position());
+                        }
                     }
                 }
+                pipeline.step(
+                    &configuration.gravity,
+                    &integration_parameters,
+                    &mut broad_phase,
+                    &mut narrow_phase,
+                    &mut bodies,
+                    &mut colliders,
+                    &mut joints,
+                    filter.contact_filter.as_deref(),
+                    filter.proximity_filter.as_deref(),
+                    &*events,
+                );
             }
-            pipeline.step(
-                &configuration.gravity,
-                &integration_parameters,
-                &mut broad_phase,
-                &mut narrow_phase,
-                &mut bodies,
-                &mut colliders,
-                &mut joints,
-                filter.contact_filter.as_deref(),
-                filter.proximity_filter.as_deref(),
-                &*events,
-            );
+            sim_to_render_time.diff -= sim_dt;
         }
-        sim_to_render_time.diff -= sim_dt;
+    } else {
+        pipeline.step(
+            &configuration.gravity,
+            &integration_parameters,
+            &mut broad_phase,
+            &mut narrow_phase,
+            &mut bodies,
+            &mut colliders,
+            &mut joints,
+            filter.contact_filter.as_deref(),
+            filter.proximity_filter.as_deref(),
+            &*events,
+        );
     }
 
     if configuration.query_pipeline_active {
@@ -124,7 +244,7 @@ pub fn step_world_system(
 }
 
 #[cfg(feature = "dim2")]
-fn sync_transform_2d(pos: Isometry<f32>, scale: f32, transform: &mut Mut<Transform>) {
+pub(crate) fn sync_transform(pos: &Isometry<f32>, scale: f32, transform: &mut Transform) {
     // Do not touch the 'z' part of the translation, used in Bevy for 2d layering
     *transform.translation.x_mut() = pos.translation.vector.x * scale;
     *transform.translation.y_mut() = pos.translation.vector.y * scale;
@@ -134,7 +254,7 @@ fn sync_transform_2d(pos: Isometry<f32>, scale: f32, transform: &mut Mut<Transfo
 }
 
 #[cfg(feature = "dim3")]
-fn sync_transform_3d(pos: Isometry<f32>, scale: f32, transform: &mut Mut<Transform>) {
+pub(crate) fn sync_transform(pos: &Isometry<f32>, scale: f32, transform: &mut Transform) {
     transform.translation = Vec3::new(
         pos.translation.vector.x,
         pos.translation.vector.y,
@@ -169,22 +289,18 @@ pub fn sync_transform_system(
     for (rigid_body, previous_pos, mut transform) in interpolation_query.iter_mut() {
         if let Some(rb) = bodies.get(rigid_body.handle()) {
             // Predict position and orientation at render time
-            let pos = previous_pos.0.lerp_slerp(&rb.position, alpha);
-            #[cfg(feature = "dim2")]
-            sync_transform_2d(pos, configuration.scale, &mut transform);
+            let mut pos = *rb.position();
 
-            #[cfg(feature = "dim3")]
-            sync_transform_3d(pos, configuration.scale, &mut transform);
+            if configuration.time_dependent_number_of_timesteps && previous_pos.0.is_some() {
+                pos = previous_pos.0.unwrap().lerp_slerp(rb.position(), alpha);
+            }
+
+            sync_transform(&pos, configuration.scale, &mut transform);
         }
     }
     for (rigid_body, mut transform) in direct_query.iter_mut() {
         if let Some(rb) = bodies.get(rigid_body.handle()) {
-            let pos = rb.position;
-            #[cfg(feature = "dim2")]
-            sync_transform_2d(pos, configuration.scale, &mut transform);
-
-            #[cfg(feature = "dim3")]
-            sync_transform_3d(pos, configuration.scale, &mut transform);
+            sync_transform(rb.position(), configuration.scale, &mut transform);
         }
     }
 }
@@ -221,7 +337,7 @@ pub fn destroy_body_and_collider_system(
     }
     for entity in colliders_removed {
         if let Some(collider_handle) = entity_maps.colliders.get(entity) {
-            colliders.remove(*collider_handle, &mut bodies);
+            colliders.remove(*collider_handle, &mut bodies, true);
             entity_maps.colliders.remove(entity);
         }
     }
