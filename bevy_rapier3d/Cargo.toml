@@ -28,9 +28,10 @@ serde-serialize = [ "rapier3d/serde-serialize" ]
 enhanced-determinism = [ "rapier3d/enhanced-determinism" ]
 
 [dependencies]
-bevy = "0.3"
+bevy = { path = "../../bevy" }
+bevy_ecs = { path = "../../bevy/crates/bevy_ecs" }
 nalgebra = "0.23"
-rapier3d = "0.3"
+rapier3d = { path = "../../rapier/build/rapier3d" }
 concurrent-queue = "1"
 
 [dev-dependencies]

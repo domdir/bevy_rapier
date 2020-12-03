@@ -7,6 +7,7 @@ use crate::physics::{
 use crate::rapier::pipeline::QueryPipeline;
 use bevy::ecs::Mut;
 use bevy::prelude::*;
+use bevy_ecs::Tick;
 use rapier::dynamics::{IntegrationParameters, JointSet, RigidBodyBuilder, RigidBodySet};
 use rapier::geometry::{BroadPhase, ColliderBuilder, ColliderSet, NarrowPhase};
 use rapier::math::Isometry;
@@ -67,7 +68,6 @@ pub fn create_joints_system(
 
 /// System responsible for performing one timestep of the physics world.
 pub fn step_world_system(
-    (time, mut sim_to_render_time): (Res<Time>, ResMut<SimulationToRenderTime>),
     (configuration, integration_parameters): (Res<RapierConfiguration>, Res<IntegrationParameters>),
     filter: Res<InteractionPairFilters>,
     (mut pipeline, mut query_pipeline): (ResMut<PhysicsPipeline>, ResMut<QueryPipeline>),
@@ -85,38 +85,24 @@ pub fn step_world_system(
         events.clear();
     }
 
-    sim_to_render_time.diff += time.delta_seconds;
-
-    let sim_dt = integration_parameters.dt();
-    while sim_to_render_time.diff >= sim_dt {
-        if configuration.physics_pipeline_active {
-            // NOTE: in this comparison we do the same computations we
-            // will do for the next `while` iteration test, to make sure we
-            // don't get bit by potential float inaccuracy.
-            if sim_to_render_time.diff - sim_dt < sim_dt {
-                // This is the last simulation step to be executed in the loop
-                // Update the previous state transforms
-                for (body_handle, mut previous_state) in query.iter_mut() {
-                    if let Some(body) = bodies.get(body_handle.handle()) {
-                        previous_state.0 = body.position;
-                    }
-                }
-            }
-            pipeline.step(
-                &configuration.gravity,
-                &integration_parameters,
-                &mut broad_phase,
-                &mut narrow_phase,
-                &mut bodies,
-                &mut colliders,
-                &mut joints,
-                filter.contact_filter.as_deref(),
-                filter.proximity_filter.as_deref(),
-                &*events,
-            );
+    for (body_handle, mut previous_state) in query.iter_mut() {
+        if let Some(body) = bodies.get(body_handle.handle()) {
+            previous_state.0 = body.position;
         }
-        sim_to_render_time.diff -= sim_dt;
     }
+
+    pipeline.step(
+        &configuration.gravity,
+        &integration_parameters,
+        &mut broad_phase,
+        &mut narrow_phase,
+        &mut bodies,
+        &mut colliders,
+        &mut joints,
+        filter.contact_filter.as_deref(),
+        filter.proximity_filter.as_deref(),
+        &*events,
+    );
 
     if configuration.query_pipeline_active {
         query_pipeline.update(&mut bodies, &colliders);
@@ -150,7 +136,7 @@ fn sync_transform_3d(pos: Isometry<f32>, scale: f32, transform: &mut Mut<Transfo
 
 /// System responsible for writing the rigid-bodies positions into the Bevy translation and rotation components.
 pub fn sync_transform_system(
-    sim_to_render_time: Res<SimulationToRenderTime>,
+    tick: Res<Tick>,
     bodies: ResMut<RigidBodySet>,
     configuration: Res<RapierConfiguration>,
     integration_parameters: Res<IntegrationParameters>,
@@ -163,7 +149,7 @@ pub fn sync_transform_system(
         Without<PhysicsInterpolationComponent, (&RigidBodyHandleComponent, &mut Transform)>,
     >,
 ) {
-    let dt = sim_to_render_time.diff;
+    let dt = tick.surplus;
     let sim_dt = integration_parameters.dt();
     let alpha = dt / sim_dt;
     for (rigid_body, previous_pos, mut transform) in interpolation_query.iter_mut() {

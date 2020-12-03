@@ -9,6 +9,8 @@
 //!
 
 #![deny(missing_docs)]
+#![allow(dead_code)]
+#![allow(unused_imports)]
 
 pub extern crate nalgebra as na;
 #[cfg(feature = "dim2")]
