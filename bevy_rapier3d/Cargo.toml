@@ -1,6 +1,6 @@
 [package]
 name = "bevy_rapier3d"
-version = "0.6.2"
+version = "0.7.0"
 authors = ["Sébastien Crozet <developer@crozet.re>"]
 description = "3-dimensional physics engine in Rust, official Bevy plugin."
 documentation = "http://docs.rs/bevy_rapier3d"
@@ -35,5 +35,5 @@ rapier3d = { path = "../../rapier/build/rapier3d" }
 concurrent-queue = "1"
 
 [dev-dependencies]
-bevy_wgpu = "0.3.0"
-bevy_winit = { version = "0.3.0", features = [ "x11" ] }
+bevy_wgpu = "0.4.0"
+bevy_winit = { version = "0.4.0", features = [ "x11" ] }
